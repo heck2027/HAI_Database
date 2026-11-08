@@ -1889,18 +1889,11 @@ async function runRecheck(opts: { limit: number; deadline: number; dryRun: boole
   const { limit, deadline, dryRun } = opts;
   const nowIso = new Date().toISOString();
   const summary = {
-    due: 0,
-    checked: 0,
-    pubmedChecked: 0,
-    webChecked: 0,
-    newlyRetracted: 0,
-    newlyBroken: 0,
-    contentChanged: 0,
-    errors: [] as string[],
-    flagged: [] as { title: string; reason: string }[],
+    due: 0, checked: 0, pubmedChecked: 0, webChecked: 0,
+    newlyRetracted: 0, newlyBroken: 0, contentChanged: 0,
+    errors: [] as string[], flagged: [] as { title: string; reason: string }[],
   };
 
-  // Oldest-checked first, so every record gets visited on a rolling basis.
   const due = resources
     .filter((r) => r.reviewerStatus !== 'Rejected')
     .sort((a, b) => (a.lastCheckedAt || '').localeCompare(b.lastCheckedAt || ''))
@@ -1909,12 +1902,14 @@ async function runRecheck(opts: { limit: number; deadline: number; dryRun: boole
 
   const pubmedRecs = due.filter((r) => getPmid(r));
   const webRecs = due.filter((r) => !getPmid(r) && /^https?:\/\//i.test(r.url));
+  
   const updates: HAIResource[] = [];
+  const removals: string[] = []; // Track IDs to delete
 
-  const flag = (u: HAIResource, reason: string) => {
-    u.needsRecheck = true;
-    u.recheckReason = reason;
-    summary.flagged.push({ title: u.title, reason });
+  // Helper to log the deletion and queue the ID
+  const flagAndRemove = (u: HAIResource, reason: string) => {
+    summary.flagged.push({ title: u.title, reason: `Removed: ${reason}` });
+    removals.push(u.id);
   };
 
   // --- PubMed records: retraction check ---
@@ -1934,27 +1929,28 @@ async function runRecheck(opts: { limit: number; deadline: number; dryRun: boole
       if (!art) {
         u.linkStatus = 'broken';
         u.linkFailCount = (r.linkFailCount || 0) + 1;
-        if (u.linkFailCount === 2) {
-          flag(u, 'PMID no longer returned by PubMed');
+        if (u.linkFailCount >= 2) {
+          flagAndRemove(u, 'PMID no longer returned by PubMed');
           summary.newlyBroken++;
+        } else {
+          updates.push(u); // Keep trying until threshold
         }
       } else {
         u.linkStatus = 'ok';
         u.linkFailCount = 0;
         if (art.retracted && !r.retracted) {
-          u.retracted = true;
-          flag(u, 'Retracted publication per PubMed');
-          if (r.reviewerStatus === 'AI Screened') u.reviewerStatus = 'Flagged for Review';
+          flagAndRemove(u, 'Retracted publication per PubMed');
           summary.newlyRetracted++;
+        } else {
+          updates.push(u);
         }
       }
-      updates.push(u);
       summary.pubmedChecked++;
     }
     await sleep(NCBI_DELAY);
   }
 
-  // --- Web records (Tier 2/3 guidance pages, DOI links): link + content-change check ---
+  // --- Web records: link + content-change check ---
   await mapPool(webRecs, 6, async (r) => {
     if (Date.now() >= deadline) return;
     const c = await checkUrl(r.url);
@@ -1967,32 +1963,48 @@ async function runRecheck(opts: { limit: number; deadline: number; dryRun: boole
         const changedHash = r.contentHash && r.contentHash !== c.hash;
         const bigChange = prevLen > 0 && c.length !== undefined && Math.abs(c.length - prevLen) / prevLen > 0.1;
         if (changedHash && bigChange) {
-          flag(u, 'Page content changed substantially since last check');
+          flagAndRemove(u, 'Page content changed substantially since last check');
           summary.contentChanged++;
+        } else {
+          u.contentHash = c.hash;
+          u.contentLength = c.length;
+          updates.push(u);
         }
-        u.contentHash = c.hash;
-        u.contentLength = c.length;
+      } else {
+        updates.push(u);
       }
     } else {
       const hardGone = c.status === 404 || c.status === 410;
       u.linkStatus = hardGone ? 'broken' : 'unreachable';
       u.linkFailCount = (r.linkFailCount || 0) + 1;
       const threshold = hardGone ? 2 : 3;
-      if (u.linkFailCount === threshold) {
-        flag(u, hardGone ? `Link returns HTTP ${c.status}` : `Link unreachable on ${threshold} consecutive checks (${c.error || 'HTTP ' + c.status})`);
+      if (u.linkFailCount >= threshold) {
+        flagAndRemove(u, hardGone ? `Link returns HTTP ${c.status}` : `Link unreachable on ${threshold} consecutive checks`);
         summary.newlyBroken++;
+      } else {
+        updates.push(u);
       }
     }
-    updates.push(u);
     summary.webChecked++;
   });
 
-  summary.checked = updates.length;
+  summary.checked = updates.length + removals.length;
 
-  if (!dryRun && updates.length) {
-    await store.upsertMany(updates);
+  if (!dryRun) {
+    if (updates.length) await store.upsertMany(updates);
+    
+    // Execute removals from the database
+    if (removals.length) {
+      for (const id of removals) {
+        await store.remove(id);
+      }
+    }
+    
+    // Update the in-memory array by filtering out removed IDs
     const byId = new Map(updates.map((u) => [u.id, u]));
-    resources = resources.map((r) => byId.get(r.id) || r);
+    resources = resources
+      .filter((r) => !removals.includes(r.id))
+      .map((r) => byId.get(r.id) || r);
   }
   return summary;
 }
