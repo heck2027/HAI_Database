@@ -1396,7 +1396,7 @@ CRITICAL INCLUSION & EXCLUSION RUBRIC:
    - verdictRationale: 1-2 sentence explanation of the verdict`;
 
       const aiResp = await ai.models.generateContent({
-        model: process.env.GEMINI_MODEL || 'gemini-2.5-flash',
+        model: process.env.GEMINI_MODEL || 'gemini-3.8-flash',
         contents: prompt,
         config: {
           responseMimeType: 'application/json',
