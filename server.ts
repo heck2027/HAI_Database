@@ -356,6 +356,13 @@ function evaluateAlgorithmic(item: {
       text
     ) && !/\b(pet owners?|zoonotic|public health|human-animal|bond|therapy)\b/i.test(text);
 
+  let contentType = 'Scientific Paper';
+  if (item.url?.match(/youtube\.com|youtu\.be|vimeo\.com/i) || /\b(video|webinar)\b/i.test(text)) {
+    contentType = 'Video';
+  } else if (item.sourceType !== 'Tier 1' || /\b(news|blog|guidelines?|magazine)\b/i.test(text)) {
+    contentType = 'Article/Guideline';
+  }
+
   const warnings: string[] = [];
   let passes = true;
 
