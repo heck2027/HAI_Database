@@ -1,8 +1,0 @@
-{
-  "name": "HAI Resource Project Papers Only",
-  "description": "Comprehensive unfiltered database of human-animal interaction (HAI) research papers pulled across all categories and screened against the One Health evidence rubric.",
-  "requestFramePermissions": [],
-  "majorCapabilities": [
-    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
-  ]
-}
