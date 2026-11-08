@@ -151,6 +151,7 @@ function pruneRecord(raw: any): HAIResource {
   return {
     id: raw.id || `hai_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
     title: raw.title || 'Untitled Resource',
+    contentType: raw.contentType || 'Scientific Paper',
     url: raw.url || 'https://pubmed.ncbi.nlm.nih.gov/',
     sourceInstitution: raw.sourceInstitution || 'Peer-Reviewed Institution',
     sourceType: (raw.sourceType as SourceTier) || 'Tier 1',
